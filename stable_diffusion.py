@@ -396,7 +396,7 @@ class StableDiffusion:
 
             timesteps_t = np.array([timestep])
             t_emb = self._get_timestep_embedding(timesteps_t)
-            t_emb = np.repeat(t_emb, batch_size, axiands=0)
+            t_emb = np.repeat(t_emb, batch_size, axis=0)
 
             # Update Cross-Attention mode to 'unconditional'
             self.diffusion_model = ptp_utils.update_cross_attn_mode(
