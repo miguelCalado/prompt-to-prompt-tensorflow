@@ -36,7 +36,7 @@ Essentially, you need to have installed [TensorFlow](https://github.com/tensorfl
 
 Try it yourself:
 
-- [**Prompt-to-Prompt: Prompt Editing** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)] </sub> <br>
+- [**Prompt-to-Prompt: Prompt Editing** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]() </sub> <br>
 Notebook with the paper examples for Stable Diffusion **(WIP)**.
 
 - [**Prompt-to-Prompt: Attention Re-weighting** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]() </sub> <br>
@@ -193,7 +193,7 @@ More info in [bloc97/CrossAttentionControl](https://github.com/bloc97/CrossAtten
 
 # :ballot_box_with_check: TODO
 
-- [ ] Add tutorials.
+- [ ] Add tutorials and Google Colabs.
 - [ ] Add multi-batch support.
 - [ ] Add examples for Stable Diffusion 2.x.
 
