@@ -1,0 +1,5 @@
+black
+isort
+mypy
+flake8
+nbqa
