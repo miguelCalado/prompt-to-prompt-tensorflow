@@ -36,7 +36,7 @@ Essentially, you need to have installed [TensorFlow](https://github.com/tensorfl
 
 Try it yourself:
 
-- [**Prompt-to-Prompt: Prompt Editing** - Stable Diffusion](Prompt%20Editing.ipynb) <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1AoRRd-6oXtFEfx9Ff85GNuTcwSssb5zz?usp=sharing) </sub> <br>
+- [**Prompt-to-Prompt: Prompt Editing** - Stable Diffusion](notebooks/Prompt%20Editing.ipynb) <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1AoRRd-6oXtFEfx9Ff85GNuTcwSssb5zz?usp=sharing) </sub> <br>
 Notebook with the paper examples for Stable Diffusion **(WIP)**.
 
 - [**Prompt-to-Prompt: Attention Re-weighting** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]() </sub> <br>
