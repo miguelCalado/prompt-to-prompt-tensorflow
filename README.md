@@ -37,13 +37,10 @@ Essentially, you need to have installed [TensorFlow](https://github.com/tensorfl
 Try it yourself:
 
 - [**Prompt-to-Prompt: Prompt Editing** - Stable Diffusion](notebooks/Prompt%20Editing.ipynb) <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1AoRRd-6oXtFEfx9Ff85GNuTcwSssb5zz?usp=sharing) </sub> <br>
-Notebook with the paper examples for Stable Diffusion **(WIP)**.
+Notebook with examples for the *Prompt-to-Prompt* prompt editing approach for Stable Diffusion.
 
-- [**Prompt-to-Prompt: Attention Re-weighting** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]() </sub> <br>
-Notebook with examples for the *Prompt-to-Prompt* attention re-weighting approach for Stable Diffusion **(WIP)**.
-
-- [**Prompt-to-Prompt: Demo** - Stable Diffusion]() <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)]() </sub> <br>
-Notebook containing an interactive demo of the paper's results **(WIP)**.
+- [**Prompt-to-Prompt: Attention Re-weighting** - Stable Diffusion](notebooks/Attention%20Re-weighting.ipynb) <sub> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1UcIFg2Nd_LVaO3-UPPysCSVCNvbKjO11?usp=sharing) </sub> <br>
+Notebook with examples for the *Prompt-to-Prompt* attention re-weighting approach for Stable Diffusion.
 
 # :dart: Prompt-to-Prompt Examples
 
