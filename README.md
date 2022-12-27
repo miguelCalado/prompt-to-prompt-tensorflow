@@ -190,7 +190,7 @@ More info in [bloc97/CrossAttentionControl](https://github.com/bloc97/CrossAtten
 
 # :ballot_box_with_check: TODO
 
-- [ ] Add tutorials and Google Colabs.
+- [x] Add tutorials and Google Colabs.
 - [ ] Add multi-batch support.
 - [ ] Add examples for Stable Diffusion 2.x.
 
