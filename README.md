@@ -182,7 +182,7 @@ Decreasing the weight associated to `<blossom>` will generate the following imag
 
 For the prompt editing method, implemented in the function `text_to_image_ptp`, varying the parameters that indicate in which phase of the diffusion process the edited cross-attention maps should get injected (e.g. `cross_attn2_replace_steps_start`, `cross_attn1_replace_steps_start`), may output different results (image below).
 
-The cross-attention and prompt weights hyperparamterers should be tuned according to the users' necessities and desired outputs.
+The cross-attention and prompt weights hyperparameters should be tuned according to the users' necessities and desired outputs.
 
 ![teaser](assets/doggy.svg)
 
