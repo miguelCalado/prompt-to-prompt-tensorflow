@@ -189,7 +189,7 @@ def get_matching_sentence_tokens(
     """
     mask = np.zeros(MAX_TEXT_LEN)
     indices_target = np.arange(MAX_TEXT_LEN)
-    indices = np.zeros(MAX_TEXT_LEN)
+    indices = np.zeros(MAX_TEXT_LEN)-1
 
     for name, a0, a1, b0, b1 in SequenceMatcher(
         None, tokens, tokens_edit
