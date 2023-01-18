@@ -189,7 +189,7 @@ def get_matching_sentence_tokens(
     """
     mask = np.zeros(MAX_TEXT_LEN)
     indices_target = np.arange(MAX_TEXT_LEN)
-    indices = np.zeros(MAX_TEXT_LEN)-1
+    indices = np.zeros(MAX_TEXT_LEN) - 1
 
     for name, a0, a1, b0, b1 in SequenceMatcher(
         None, tokens, tokens_edit
@@ -309,13 +309,12 @@ def call_attn_edit(self, inputs):
     if tf.equal(self.cross_attn_mode, "edit"):
         if tf.not_equal(tf.size(self.prompt_edit_mask), 0):  # not empty
             weights_masked = tf.gather(self.attn_map, self.prompt_edit_indices, axis=-1)
-            edit_weights = (
-                weights * (1 - self.prompt_edit_mask)
-                + weights_masked * self.prompt_edit_mask
+            edit_weights = weights_masked * self.prompt_edit_mask + weights * (
+                1 - self.prompt_edit_mask
             )
-            weights = tf.reshape(edit_weights, shape=weights.shape)
+            weights = tf.reshape(edit_weights, shape=tf.shape(weights))
         else:
-            weights = tf.reshape(self.attn_map, shape=weights.shape)
+            weights = tf.reshape(self.attn_map, shape=tf.shape(weights))
 
     # Save attention
     if tf.equal(self.cross_attn_mode, "save"):
@@ -326,7 +325,7 @@ def call_attn_edit(self, inputs):
         tf.size(self.prompt_weights), 0
     ):
         attn_map_weighted = weights * self.prompt_weights
-        weights = tf.reshape(attn_map_weighted, shape=weights.shape)
+        weights = tf.reshape(attn_map_weighted, shape=tf.shape(weights))
 
     attn = td_dot(weights, v)
     attn = tf.transpose(attn, (0, 2, 1, 3))  # (bs, time, num_heads, head_size)

@@ -44,7 +44,7 @@ Notebook with examples for the *Prompt-to-Prompt* attention re-weighting approac
 
 # :dart: Prompt-to-Prompt Examples
 
-To start using the *Prompt-to-Prompt* framework, you first need to setup a Tensorflow [strategy](https://www.tensorflow.org/api_docs/python/tf/distribute/Strategy) for running computations across multiple devices (in case you have many).
+To start using the *Prompt-to-Prompt* framework, you first need to set up a Tensorflow [strategy](https://www.tensorflow.org/api_docs/python/tf/distribute/Strategy) for running computations across multiple devices (in case you have many).
 
 For example, you can check the available hardware with:
 
@@ -191,7 +191,7 @@ More info in [bloc97/CrossAttentionControl](https://github.com/bloc97/CrossAtten
 # :ballot_box_with_check: TODO
 
 - [x] Add tutorials and Google Colabs.
-- [ ] Add multi-batch support.
+- [x] Add multi-batch support.
 - [ ] Add examples for Stable Diffusion 2.x.
 
 # 👨‍🎓 References
