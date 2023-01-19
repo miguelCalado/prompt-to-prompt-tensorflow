@@ -349,7 +349,7 @@ class StableDiffusion:
         if isinstance(cross_attn_steps, float):
             cross_attn_steps = (0.0, cross_attn_steps)
 
-        if method=='refine':
+        if method == "refine":
             # Get the mask and indices of the difference between the original prompt token's and the edited one
             mask, indices = ptp_utils.get_matching_sentence_tokens(
                 tokens_conditional[0], tokens_conditional_edit[0]
@@ -408,31 +408,41 @@ class StableDiffusion:
             # TODO: # if method=='reweigh':
             # Edit the Cross-Attention layer activations
             if cross_attn_steps[0] <= t_scale <= cross_attn_steps[1]:
-                if method=='replace':
+                if method == "replace":
                     # Use cross attention from the original prompt (M_t)
                     self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                        diff_model=self.diffusion_model, mode="use_last", attn_suffix="attn2"
+                        diff_model=self.diffusion_model,
+                        mode="use_last",
+                        attn_suffix="attn2",
                     )
-                elif method=='refine':
+                elif method == "refine":
                     self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                        diff_model=self.diffusion_model, mode="edit", attn_suffix="attn2"
+                        diff_model=self.diffusion_model,
+                        mode="edit",
+                        attn_suffix="attn2",
                     )
             else:
                 # Use cross attention from the edited prompt (M^*_t)
                 self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model, mode="injection", attn_suffix="attn2"
+                    diff_model=self.diffusion_model,
+                    mode="injection",
+                    attn_suffix="attn2",
                 )
-            
+
             # Edit the self-Attention layer activations
             if self_attn_steps[0] <= t_scale <= self_attn_steps[1]:
                 # Use self attention from the original prompt (M_t)
                 self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model, mode="use_last", attn_suffix="attn1"
+                    diff_model=self.diffusion_model,
+                    mode="use_last",
+                    attn_suffix="attn1",
                 )
             else:
                 # Use self attention from the edited prompt (M^*_t)
                 self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model, mode="injection", attn_suffix="attn1"
+                    diff_model=self.diffusion_model,
+                    mode="injection",
+                    attn_suffix="attn1",
                 )
 
             # Predict the edited conditional noise residual
@@ -441,7 +451,7 @@ class StableDiffusion:
                 batch_size=batch_size,
                 verbose=0,
             )
-            
+
             # Perform guidance
             e_t = unconditional_latent + unconditional_guidance_scale * (
                 conditional_latent_edit - unconditional_latent

@@ -306,13 +306,16 @@ def call_attn_edit(self, inputs):
     weights = keras.activations.softmax(score)  # (bs, num_heads, time, time)
 
     # Method: Prompt Refinement
-    if tf.equal(self.cross_attn_mode, "edit") and tf.not_equal(tf.size(self.prompt_edit_mask), 0):  # not empty
-            weights_masked = tf.gather(self.attn_map, self.prompt_edit_indices, axis=-1)
-            edit_weights = weights_masked * self.prompt_edit_mask + weights * (
-                1 - self.prompt_edit_mask
-            )
-            weights = tf.reshape(edit_weights, shape=tf.shape(weights))
+    if tf.equal(self.cross_attn_mode, "edit") and tf.not_equal(
+        tf.size(self.prompt_edit_mask), 0
+    ):  # not empty
+        weights_masked = tf.gather(self.attn_map, self.prompt_edit_indices, axis=-1)
+        edit_weights = weights_masked * self.prompt_edit_mask + weights * (
+            1 - self.prompt_edit_mask
+        )
+        weights = tf.reshape(edit_weights, shape=tf.shape(weights))
 
+    # Use the attention from the original prompt (M_t)
     if tf.equal(self.cross_attn_mode, "use_last"):
         weights = tf.reshape(self.attn_map, shape=tf.shape(weights))
 
