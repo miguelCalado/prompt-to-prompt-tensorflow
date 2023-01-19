@@ -246,13 +246,12 @@ class StableDiffusion:
         self,
         prompt: str,
         prompt_edit: str,
+        method: str,
+        self_attn_steps: Union[float, Tuple[float, float]],
+        cross_attn_steps: Union[float, Tuple[float, float]],
+        attn_edit_weights: np.ndarray = np.array([]),
         num_steps: int = 50,
         unconditional_guidance_scale: float = 7.5,
-        prompt_edit_weights: np.ndarray = np.array([]),
-        cross_attn2_replace_steps_start: float = 0.0,
-        cross_attn2_replace_steps_end: float = 1.0,
-        cross_attn1_replace_steps_start: float = 0.0,
-        cross_attn1_replace_steps_end: float = 1.0,
         batch_size: int = 1,
         seed: Optional[int] = None,
     ) -> np.ndarray:
@@ -267,26 +266,20 @@ class StableDiffusion:
             Text containing the information for the model to generate.
         prompt_edit : str
             Second prompt used to control the edit of the generated image.
+        method : str
+            Prompt-to-Prompt method to chose. Can be ['refine', 'replace', 'reweigh'].
+        self_attn_steps : Union[float, Tuple[float, float]]
+
+        cross_attn_steps : Union[float, Tuple[float, float]]
+
+        attn_edit_weights: np.array([]), optional
+            Set of weights for each edit prompt token.
+            This is used for manipulating the importance of the edit prompt tokens,
+            increasing or decreasing the importance assigned to each word.
         num_steps : int, optional
             Number of diffusion steps (controls image quality), by default 50.
         unconditional_guidance_scale : float, optional
             Controls how closely the image should adhere to the prompt, by default 7.5.
-        prompt_edit_weights: List, optional
-            Set of weights for each edit prompt token.
-            This is used for manipulating the importance of the edit prompt tokens,
-            increasing or decreasing the importance assigned to each word.
-        cross_attn2_replace_steps_start : float, optional
-            Specifies at which step of the start of the diffusion process it replaces
-            the attention maps of the second layer of cross attention, by default 0.0.
-        cross_attn2_replace_steps_end : float, optional
-            Specifies at which step of the end of the diffusion process it replaces
-            the attention maps of the second layer of cross attention, by default 1.0.
-        cross_attn1_replace_steps_start : float, optional
-            Specifies at which step of the start of the diffusion process it replaces
-            the attention maps of the first layer of cross attention, by default 0.0.
-        cross_attn1_replace_steps_end : float, optional
-            Specifies at which step of the end of the diffusion process it replaces
-            the attention maps of the first layer of cross attention, by default 1.0.
         batch_size : int, optional
             Batch size (number of images to generate), by default 1.
         seed : Optional[int], optional
@@ -317,26 +310,13 @@ class StableDiffusion:
                 prompt_edit="teddy bear with heart-shaped red colored sunglasses relaxing in a pool",
                 num_steps=50,
                 unconditional_guidance_scale=8,
-                cross_attn2_replace_steps_start=0.0,
-                cross_attn2_replace_steps_end=1.0,
-                cross_attn1_replace_steps_start=1.0,
-                cross_attn1_replace_steps_end=1.0,
+                self_attn_steps=0.0,
+                cross_attn_steps=1.0,
                 seed=3345435,
                 batch_size=1,
             )
         >>> Image.fromarray(img[0]).save("edited_prompt.png")
-
-        Raises
-        ------
-        ValueError
-            If the batch size is greater than 1.
         """
-        # TODO: Add multi batch processing
-        if batch_size > 1:
-            raise ValueError(
-                "Batch size can't be bigger then one. Value not supported."
-            )
-
         # Tokenize prompt
         tokens_conditional = self.tokenize_prompt(prompt, batch_size)
 
@@ -363,20 +343,27 @@ class StableDiffusion:
             [unconditional_tokens, pos_ids], batch_size=batch_size, verbose=0
         )
 
-        # Get the mask and indices of the difference between the original prompt token's and the edited one
-        mask, indices = ptp_utils.get_matching_sentence_tokens(
-            tokens_conditional[0], tokens_conditional_edit[0]
-        )
+        ## PTP stuff
+        if isinstance(self_attn_steps, float):
+            self_attn_steps = (0.0, self_attn_steps)
+        if isinstance(cross_attn_steps, float):
+            cross_attn_steps = (0.0, cross_attn_steps)
 
-        # Add the mask and indices to the diffusion model
-        self.diffusion_model = ptp_utils.put_mask_dif_model(
-            self.diffusion_model, mask, indices
-        )
+        if method=='refine':
+            # Get the mask and indices of the difference between the original prompt token's and the edited one
+            mask, indices = ptp_utils.get_matching_sentence_tokens(
+                tokens_conditional[0], tokens_conditional_edit[0]
+            )
+
+            # Add the mask and indices to the diffusion model
+            self.diffusion_model = ptp_utils.put_mask_dif_model(
+                self.diffusion_model, mask, indices
+            )
 
         # Update prompt weights variable
-        if prompt_edit_weights.size:
+        if attn_edit_weights.size:
             self.diffusion_model = ptp_utils.add_prompt_weights(
-                diff_model=self.diffusion_model, prompt_weights=prompt_edit_weights
+                diff_model=self.diffusion_model, prompt_weights=attn_edit_weights
             )
 
         # Scheduler
@@ -385,7 +372,6 @@ class StableDiffusion:
 
         # Get initial random noise
         latent = self._get_initial_diffusion_noise(batch_size, seed)
-
         # Get Initial parameters
         alphas, alphas_prev = self._get_initial_alphas(timesteps)
 
@@ -398,12 +384,14 @@ class StableDiffusion:
             t_emb = self._get_timestep_embedding(timesteps_t)
             t_emb = np.repeat(t_emb, batch_size, axis=0)
 
+            t_scale = 1 - (timestep / NUM_TRAIN_TIMESTEPS)
+
             # Update Cross-Attention mode to 'unconditional'
             self.diffusion_model = ptp_utils.update_cross_attn_mode(
                 diff_model=self.diffusion_model, mode="unconditional"
             )
 
-            # Predict the uncondtional noise residual
+            # Predict the unconditional noise residual
             unconditional_latent = self.diffusion_model.predict(
                 [latent, t_emb, unconditional_context], batch_size=batch_size, verbose=0
             )
@@ -417,27 +405,35 @@ class StableDiffusion:
                 [latent, t_emb, conditional_context], batch_size=batch_size, verbose=0
             )
 
+            # TODO: # if method=='reweigh':
             # Edit the Cross-Attention layer activations
-            t_scale = timestep / NUM_TRAIN_TIMESTEPS
-            if (
-                t_scale >= cross_attn2_replace_steps_start
-                and t_scale <= cross_attn2_replace_steps_end
-            ):
+            if cross_attn_steps[0] <= t_scale <= cross_attn_steps[1]:
+                if method=='replace':
+                    # Use cross attention from the original prompt (M_t)
+                    self.diffusion_model = ptp_utils.update_cross_attn_mode(
+                        diff_model=self.diffusion_model, mode="use_last", attn_suffix="attn2"
+                    )
+                elif method=='refine':
+                    self.diffusion_model = ptp_utils.update_cross_attn_mode(
+                        diff_model=self.diffusion_model, mode="edit", attn_suffix="attn2"
+                    )
+            else:
+                # Use cross attention from the edited prompt (M^*_t)
                 self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model, mode="edit", attn_suffix="attn2"
+                    diff_model=self.diffusion_model, mode="injection", attn_suffix="attn2"
                 )
-            if (
-                t_scale >= cross_attn1_replace_steps_start
-                and t_scale <= cross_attn1_replace_steps_end
-            ):
+            
+            # Edit the self-Attention layer activations
+            if self_attn_steps[0] <= t_scale <= self_attn_steps[1]:
+                # Use self attention from the original prompt (M_t)
                 self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model, mode="edit", attn_suffix="attn1"
+                    diff_model=self.diffusion_model, mode="use_last", attn_suffix="attn1"
                 )
-
-            # Use the parsed weights on the edited prompt
-            self.diffusion_model = ptp_utils.update_prompt_weights_usage(
-                diff_model=self.diffusion_model, use=True
-            )
+            else:
+                # Use self attention from the edited prompt (M^*_t)
+                self.diffusion_model = ptp_utils.update_cross_attn_mode(
+                    diff_model=self.diffusion_model, mode="injection", attn_suffix="attn1"
+                )
 
             # Predict the edited conditional noise residual
             conditional_latent_edit = self.diffusion_model.predict(
@@ -445,12 +441,7 @@ class StableDiffusion:
                 batch_size=batch_size,
                 verbose=0,
             )
-
-            # Assign usage to False so it doesn't get used in other contexts
-            self.diffusion_model = ptp_utils.update_prompt_weights_usage(
-                diff_model=self.diffusion_model, use=False
-            )
-
+            
             # Perform guidance
             e_t = unconditional_latent + unconditional_guidance_scale * (
                 conditional_latent_edit - unconditional_latent
@@ -493,6 +484,48 @@ class StableDiffusion:
 
         return phrase
 
+    def create_prompt_weights(
+        self, prompt: str, prompt_weights: List[Tuple[str, float]]
+    ) -> np.ndarray:
+        """Create an array of weights for each prompt token.
+
+        This is used for manipulating the importance of the prompt tokens,
+        increasing or decreasing the importance assigned to each word.
+
+        Parameters
+        ----------
+        prompt : str
+            The prompt string to tokenize, must be 77 tokens or shorter.
+        prompt_weights : List[Tuple[str, float]]
+            A list of tuples containing the pair of word and weight to be manipulated.
+        batch_size : int
+            Batch size.
+
+        Returns
+        -------
+        np.ndarray
+            Array of weights to control the importance of each prompt token.
+        """
+
+        # Initialize the weights to 1.
+        weights = np.ones(MAX_TEXT_LEN)
+
+        # Get the prompt tokens
+        tokens = self.tokenize_prompt(prompt, batch_size=1)
+
+        # Extract the new weights and tokens
+        edit_weights = [weight for word, weight in prompt_weights]
+        edit_tokens = [
+            self.tokenizer.encode(word)[1:-1] for word, weight in prompt_weights
+        ]
+
+        # Get the indexes of the tokens
+        index_edit_tokens = np.in1d(tokens, edit_tokens).nonzero()[0]
+
+        # Replace the original weight values
+        weights[index_edit_tokens] = edit_weights
+        return weights
+
     def _get_initial_alphas(self, timesteps):
 
         alphas = [_ALPHAS_CUMPROD[t] for t in timesteps]
@@ -528,48 +561,6 @@ class StableDiffusion:
         dir_xt = math.sqrt(1.0 - a_prev) * e_t
         x_prev = math.sqrt(a_prev) * pred_x0 + dir_xt
         return x_prev
-
-    def create_prompt_weights(
-        self, prompt: str, prompt_weights: List[Tuple[str, float]], batch_size: int
-    ) -> np.ndarray:
-        """Create an array of weights for each prompt token.
-
-        This is used for manipulating the importance of the prompt tokens,
-        increasing or decreasing the importance assigned to each word.
-
-        Parameters
-        ----------
-        prompt : str
-            The prompt string to tokenize, must be 77 tokens or shorter.
-        prompt_weights : List[Tuple[str, float]]
-            A list of tuples containing the pair of word and weight to be manipulated.
-        batch_size : int
-            Batch size.
-
-        Returns
-        -------
-        np.ndarray
-            Array of weights to control the importance of each prompt token.
-        """
-
-        # Initialize the weights to 1.
-        weights = np.ones(MAX_TEXT_LEN)
-
-        # Get the prompt tokens
-        tokens = self.tokenize_prompt(prompt, batch_size)
-
-        # Extract the new weights and tokens
-        edit_weights = [weight for word, weight in prompt_weights]
-        edit_tokens = [
-            self.tokenizer.encode(word)[1:-1] for word, weight in prompt_weights
-        ]
-
-        # Get the indexes of the tokens
-        index_edit_tokens = np.in1d(tokens, edit_tokens).nonzero()[0]
-
-        # Replace the original weight values
-        weights[index_edit_tokens] = edit_weights
-        return weights
 
 
 def get_models(
