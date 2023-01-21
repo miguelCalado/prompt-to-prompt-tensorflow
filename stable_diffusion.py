@@ -33,11 +33,11 @@ from keras_cv.models.stable_diffusion.decoder import Decoder
 from keras_cv.models.stable_diffusion.diffusion_model import DiffusionModel
 from keras_cv.models.stable_diffusion.image_encoder import ImageEncoder
 from keras_cv.models.stable_diffusion.text_encoder import TextEncoder
-from tqdm import tqdm
+from tensorflow import keras
 
 import ptp_utils
 
-MAX_TEXT_LEN = 77
+MAX_PROMPT_LENGTH = 77
 NUM_TRAIN_TIMESTEPS = 1000
 
 
@@ -97,14 +97,11 @@ class StableDiffusion:
 
     def __init__(
         self,
-        strategy: tf.distribute,
         img_height: int = 512,
         img_width: int = 512,
         jit_compile: bool = False,
         download_weights: bool = True,
     ):
-        self.strategy = strategy
-
         # UNet requires multiples of 2**7 = 128
         img_height = round(img_height / 128) * 128
         img_width = round(img_width / 128) * 128
@@ -114,7 +111,7 @@ class StableDiffusion:
         self.tokenizer = SimpleTokenizer()
 
         text_encoder, diffusion_model, decoder, encoder = get_models(
-            strategy, img_height, img_width, download_weights=download_weights
+            img_height, img_width, download_weights=download_weights
         )
         self.text_encoder = text_encoder
         self.diffusion_model = diffusion_model
@@ -137,6 +134,7 @@ class StableDiffusion:
     def text_to_image(
         self,
         prompt: str,
+        negative_prompt: Optional[str] = None,
         num_steps: int = 50,
         unconditional_guidance_scale: float = 7.5,
         prompt_weights: np.ndarray = np.array([]),
@@ -149,6 +147,10 @@ class StableDiffusion:
         ----------
         prompt : str
             Text containing the information for the model to generate.
+        negative_prompt : str
+            A string containing information to negatively guide the image
+            generation (e.g. by removing or altering certain aspects of the
+            generated image).
         num_steps : int, optional
             Number of diffusion steps (controls image quality), by default 50.
         unconditional_guidance_scale : float, optional
@@ -167,24 +169,21 @@ class StableDiffusion:
         np.ndarray
             Generated image.
         """
-        # Tokenize prompt
-        tokens_conditional = self.tokenize_prompt(prompt, batch_size)
 
-        # Encode prompt tokens (and their positions) into a "context vector"
-        pos_ids = np.array(list(range(MAX_TEXT_LEN)))[None].astype("int32")
-        pos_ids = np.repeat(pos_ids, batch_size, axis=0)
-        conditional_context = self.text_encoder.predict(
-            [tokens_conditional, pos_ids], batch_size=batch_size, verbose=0
-        )
+        # Tokenize and encode prompt
+        encoded_text = self.encode_text(prompt)
 
-        # Encode unconditional tokens (and their positions into an "unconditional context vector"
-        # TODO: arrange this
-        unconditional_tokens = np.array(_UNCONDITIONAL_TOKENS)[None].astype("int32")
-        unconditional_tokens = np.repeat(unconditional_tokens, batch_size, axis=0)
-        unconditional_tokens = tf.convert_to_tensor(unconditional_tokens)
-        unconditional_context = self.text_encoder.predict(
-            [unconditional_tokens, pos_ids], batch_size=batch_size, verbose=0
-        )
+        conditional_context = self._expand_tensor(encoded_text, batch_size)
+
+        if negative_prompt is None:
+            unconditional_context = tf.repeat(
+                self._get_unconditional_context(), batch_size, axis=0
+            )
+        else:
+            unconditional_context = self.encode_text(negative_prompt)
+            unconditional_context = self._expand_tensor(
+                unconditional_context, batch_size
+            )
 
         # Update prompt weights variable
         if prompt_weights.size:
@@ -195,33 +194,31 @@ class StableDiffusion:
                 diff_model=self.diffusion_model, use=True
             )
 
-        # Scheduler
-        # TODO: Add diffusers LMSDiscreteScheduler
-        timesteps = np.arange(1, 1000, 1000 // num_steps)
-
         # Get initial random noise
         latent = self._get_initial_diffusion_noise(batch_size, seed)
+
+        # Scheduler
+        # TODO: Add diffusers LMSDiscreteScheduler
+        timesteps = tf.range(1, 1000, 1000 // num_steps)
 
         # Get Initial parameters
         alphas, alphas_prev = self._get_initial_alphas(timesteps)
 
+        progbar = keras.utils.Progbar(len(timesteps))
+        iteration = 0
         # Diffusion stage
-        progbar = tqdm(list(enumerate(timesteps))[::-1])
-        for index, timestep in progbar:
-            progbar.set_description(f"{index:3d} {timestep:3d}")
+        for index, timestep in list(enumerate(timesteps))[::-1]:
 
-            timesteps_t = np.array([timestep])
-            t_emb = self._get_timestep_embedding(timesteps_t)
-            t_emb = np.repeat(t_emb, batch_size, axis=0)
+            t_emb = self._get_timestep_embedding(timestep, batch_size)
 
             # Predict the unconditional noise residual
-            unconditional_latent = self.diffusion_model.predict(
-                [latent, t_emb, unconditional_context], batch_size=batch_size, verbose=0
+            unconditional_latent = self.diffusion_model.predict_on_batch(
+                [latent, t_emb, unconditional_context]
             )
 
             # Predict the conditional noise residual
-            conditional_latent = self.diffusion_model.predict(
-                [latent, t_emb, conditional_context], batch_size=batch_size, verbose=0
+            conditional_latent = self.diffusion_model.predict_on_batch(
+                [latent, t_emb, conditional_context]
             )
 
             # Perform guidance
@@ -232,8 +229,11 @@ class StableDiffusion:
             a_t, a_prev = alphas[index], alphas_prev[index]
             latent = self._get_x_prev(latent, e_t, a_t, a_prev)
 
+            iteration += 1
+            progbar.update(iteration)
+
         # Decode image
-        img = self._get_decoding_stage(latent, batch_size)
+        img = self._get_decoding_stage(latent)
 
         # Reset control variables
         self.diffusion_model = ptp_utils.reset_initial_tf_variables(
@@ -241,6 +241,36 @@ class StableDiffusion:
         )
 
         return img
+
+    def encode_text(self, prompt):
+        """Encodes a prompt into a latent text encoding.
+        The encoding produced by this method should be used as the
+        `encoded_text` parameter of `StableDiffusion.generate_image`. Encoding
+        text separately from generating an image can be used to arbitrarily
+        modify the text encoding priot to image generation, e.g. for walking
+        between two prompts.
+        Args:
+            prompt: a string to encode, must be 77 tokens or shorter.
+        Example:
+        ```python
+        from keras_cv.models import StableDiffusion
+        model = StableDiffusion(img_height=512, img_width=512, jit_compile=True)
+        encoded_text  = model.encode_text("Tacos at dawn")
+        img = model.generate_image(encoded_text)
+        ```
+        """
+        # Tokenize prompt (i.e. starting context)
+        inputs = self.tokenizer.encode(prompt)
+        if len(inputs) > MAX_PROMPT_LENGTH:
+            raise ValueError(
+                f"Prompt is too long (should be <= {MAX_PROMPT_LENGTH} tokens)"
+            )
+        phrase = inputs + [49407] * (MAX_PROMPT_LENGTH - len(inputs))
+        phrase = tf.convert_to_tensor([phrase], dtype=tf.int32)
+
+        context = self.text_encoder.predict_on_batch([phrase, self._get_pos_ids()])
+
+        return context
 
     def text_to_image_ptp(
         self,
@@ -250,6 +280,7 @@ class StableDiffusion:
         self_attn_steps: Union[float, Tuple[float, float]],
         cross_attn_steps: Union[float, Tuple[float, float]],
         attn_edit_weights: np.ndarray = np.array([]),
+        negative_prompt: Optional[str] = None,
         num_steps: int = 50,
         unconditional_guidance_scale: float = 7.5,
         batch_size: int = 1,
@@ -276,6 +307,10 @@ class StableDiffusion:
             Set of weights for each edit prompt token.
             This is used for manipulating the importance of the edit prompt tokens,
             increasing or decreasing the importance assigned to each word.
+        negative_prompt : Optional[str] = None
+            A string containing information to negatively guide the image
+            generation (e.g. by removing or altering certain aspects of the
+            generated image).
         num_steps : int, optional
             Number of diffusion steps (controls image quality), by default 50.
         unconditional_guidance_scale : float, optional
@@ -317,31 +352,24 @@ class StableDiffusion:
             )
         >>> Image.fromarray(img[0]).save("edited_prompt.png")
         """
-        # Tokenize prompt
-        tokens_conditional = self.tokenize_prompt(prompt, batch_size)
 
-        # Tokenize prompt edit
-        tokens_conditional_edit = self.tokenize_prompt(prompt_edit, batch_size)
+        # Tokenize and encode prompt
+        encoded_text = self.encode_text(prompt)
+        conditional_context = self._expand_tensor(encoded_text, batch_size)
 
-        # Encode prompt tokens (and their positions) into a "context vector"
-        pos_ids = np.array(list(range(MAX_TEXT_LEN)))[None].astype("int32")
-        pos_ids = np.repeat(pos_ids, batch_size, axis=0)
-        conditional_context = self.text_encoder.predict(
-            [tokens_conditional, pos_ids], batch_size=batch_size, verbose=0
-        )
+        # Tokenize and encode edit prompt
+        encoded_text_edit = self.encode_text(prompt_edit)
+        conditional_context_edit = self._expand_tensor(encoded_text_edit, batch_size)
 
-        # Encode prompt edit tokens
-        conditional_context_edit = self.text_encoder.predict(
-            [tokens_conditional_edit, pos_ids], batch_size=batch_size, verbose=0
-        )
-
-        # Encode unconditional tokens (and their positions into an "unconditional context vector"
-        unconditional_tokens = np.array(_UNCONDITIONAL_TOKENS)[None].astype("int32")
-        unconditional_tokens = np.repeat(unconditional_tokens, batch_size, axis=0)
-        unconditional_tokens = tf.convert_to_tensor(unconditional_tokens)
-        unconditional_context = self.text_encoder.predict(
-            [unconditional_tokens, pos_ids], batch_size=batch_size, verbose=0
-        )
+        if negative_prompt is None:
+            unconditional_context = tf.repeat(
+                self._get_unconditional_context(), batch_size, axis=0
+            )
+        else:
+            unconditional_context = self.encode_text(negative_prompt)
+            unconditional_context = self._expand_tensor(
+                unconditional_context, batch_size
+            )
 
         ## PTP stuff
         if isinstance(self_attn_steps, float):
@@ -351,8 +379,10 @@ class StableDiffusion:
 
         if method == "refine":
             # Get the mask and indices of the difference between the original prompt token's and the edited one
+            tokens_conditional = self.tokenize_prompt(prompt)
+            tokens_conditional_edit = self.tokenize_prompt(prompt_edit)
             mask, indices = ptp_utils.get_matching_sentence_tokens(
-                tokens_conditional[0], tokens_conditional_edit[0]
+                tokens_conditional[0].numpy(), tokens_conditional_edit[0].numpy()
             )
 
             # Add the mask and indices to the diffusion model
@@ -366,24 +396,24 @@ class StableDiffusion:
                 diff_model=self.diffusion_model, prompt_weights=attn_edit_weights
             )
 
-        # Scheduler
-        # TODO: Add diffusers LMSDiscreteScheduler
-        timesteps = np.arange(1, 1000, 1000 // num_steps)
-
         # Get initial random noise
         latent = self._get_initial_diffusion_noise(batch_size, seed)
+
+        # Scheduler
+        # TODO: Add diffusers LMSDiscreteScheduler
+        timesteps = tf.range(1, 1000, 1000 // num_steps)
+
         # Get Initial parameters
         alphas, alphas_prev = self._get_initial_alphas(timesteps)
 
+        progbar = keras.utils.Progbar(len(timesteps))
+        iteration = 0
         # Diffusion stage
-        progbar = tqdm(list(enumerate(timesteps))[::-1])
-        for index, timestep in progbar:
-            progbar.set_description(f"{index:3d} {timestep:3d}")
+        for index, timestep in list(enumerate(timesteps))[::-1]:
 
-            timesteps_t = np.array([timestep])
-            t_emb = self._get_timestep_embedding(timesteps_t)
-            t_emb = np.repeat(t_emb, batch_size, axis=0)
+            t_emb = self._get_timestep_embedding(timestep, batch_size)
 
+            # Change this!
             t_scale = 1 - (timestep / NUM_TRAIN_TIMESTEPS)
 
             # Update Cross-Attention mode to 'unconditional'
@@ -392,8 +422,8 @@ class StableDiffusion:
             )
 
             # Predict the unconditional noise residual
-            unconditional_latent = self.diffusion_model.predict(
-                [latent, t_emb, unconditional_context], batch_size=batch_size, verbose=0
+            unconditional_latent = self.diffusion_model.predict_on_batch(
+                [latent, t_emb, unconditional_context]
             )
 
             # Save last cross attention activations
@@ -401,8 +431,8 @@ class StableDiffusion:
                 diff_model=self.diffusion_model, mode="save"
             )
             # Predict the conditional noise residual
-            _ = self.diffusion_model.predict(
-                [latent, t_emb, conditional_context], batch_size=batch_size, verbose=0
+            _ = self.diffusion_model.predict_on_batch(
+                [latent, t_emb, conditional_context]
             )
 
             # TODO: # if method=='reweigh':
@@ -446,10 +476,8 @@ class StableDiffusion:
                 )
 
             # Predict the edited conditional noise residual
-            conditional_latent_edit = self.diffusion_model.predict(
+            conditional_latent_edit = self.diffusion_model.predict_on_batch(
                 [latent, t_emb, conditional_context_edit],
-                batch_size=batch_size,
-                verbose=0,
             )
 
             # Perform guidance
@@ -460,8 +488,11 @@ class StableDiffusion:
             a_t, a_prev = alphas[index], alphas_prev[index]
             latent = self._get_x_prev(latent, e_t, a_t, a_prev)
 
+            iteration += 1
+            progbar.update(iteration)
+
         # Decode image
-        img = self._get_decoding_stage(latent, batch_size)
+        img = self._get_decoding_stage(latent)
 
         # Reset control variables
         self.diffusion_model = ptp_utils.reset_initial_tf_variables(
@@ -470,7 +501,17 @@ class StableDiffusion:
 
         return img
 
-    def tokenize_prompt(self, prompt: str, batch_size: int) -> np.ndarray:
+    def _get_unconditional_context(self):
+        unconditional_tokens = tf.convert_to_tensor(
+            [_UNCONDITIONAL_TOKENS], dtype=tf.int32
+        )
+        unconditional_context = self.text_encoder.predict_on_batch(
+            [unconditional_tokens, self._get_pos_ids()]
+        )
+
+        return unconditional_context
+
+    def tokenize_prompt(self, prompt: str) -> tf.Tensor:
         """Tokenize a phrase prompt.
 
         Parameters
@@ -486,12 +527,12 @@ class StableDiffusion:
             Array of tokens.
         """
         inputs = self.tokenizer.encode(prompt)
-        if len(inputs) > MAX_TEXT_LEN:
-            raise ValueError(f"Prompt is too long (should be <= {MAX_TEXT_LEN} tokens)")
-        phrase = inputs + [49407] * (MAX_TEXT_LEN - len(inputs))
-        phrase = np.array(phrase)[None].astype("int32")
-        phrase = np.repeat(phrase, batch_size, axis=0)
-
+        if len(inputs) > MAX_PROMPT_LENGTH:
+            raise ValueError(
+                f"Prompt is too long (should be <= {MAX_PROMPT_LENGTH} tokens)"
+            )
+        phrase = inputs + [49407] * (MAX_PROMPT_LENGTH - len(inputs))
+        phrase = tf.convert_to_tensor([phrase], dtype=tf.int32)
         return phrase
 
     def create_prompt_weights(
@@ -518,10 +559,10 @@ class StableDiffusion:
         """
 
         # Initialize the weights to 1.
-        weights = np.ones(MAX_TEXT_LEN)
+        weights = np.ones(MAX_PROMPT_LENGTH)
 
         # Get the prompt tokens
-        tokens = self.tokenize_prompt(prompt, batch_size=1)
+        tokens = self.tokenize_prompt(prompt)
 
         # Extract the new weights and tokens
         edit_weights = [weight for word, weight in prompt_weights]
@@ -536,6 +577,15 @@ class StableDiffusion:
         weights[index_edit_tokens] = edit_weights
         return weights
 
+    def _expand_tensor(self, text_embedding, batch_size):
+        """Extends a tensor by repeating it to fit the shape of the given batch size."""
+        text_embedding = tf.squeeze(text_embedding)
+        if text_embedding.shape.rank == 2:
+            text_embedding = tf.repeat(
+                tf.expand_dims(text_embedding, axis=0), batch_size, axis=0
+            )
+        return text_embedding
+
     def _get_initial_alphas(self, timesteps):
 
         alphas = [_ALPHAS_CUMPROD[t] for t in timesteps]
@@ -548,22 +598,22 @@ class StableDiffusion:
             (batch_size, self.img_height // 8, self.img_width // 8, 4), seed=seed
         )
 
-    def _get_timestep_embedding(
-        self, timesteps, dim: int = 320, max_period: int = 10000
-    ):
+    def _get_timestep_embedding(self, timestep, batch_size, dim=320, max_period=10000):
         half = dim // 2
-        freqs = np.exp(
-            -math.log(max_period) * np.arange(0, half, dtype="float32") / half
+        freqs = tf.math.exp(
+            -math.log(max_period) * tf.range(0, half, dtype=tf.float32) / half
         )
-        args = np.array(timesteps) * freqs
-        embedding = np.concatenate([np.cos(args), np.sin(args)])
-        return tf.convert_to_tensor(embedding.reshape(1, -1), dtype=tf.float32)
+        args = tf.convert_to_tensor([timestep], dtype=tf.float32) * freqs
+        embedding = tf.concat([tf.math.cos(args), tf.math.sin(args)], 0)
+        embedding = tf.reshape(embedding, [1, -1])
+        return tf.repeat(embedding, batch_size, axis=0)
 
-    def _get_decoding_stage(self, latent, batch_size):
-        decoded = self.decoder.predict(latent, batch_size=batch_size, verbose=0)
+    def _get_decoding_stage(self, latent):
+        decoded = self.decoder.predict_on_batch(latent)
         decoded = ((decoded + 1) / 2) * 255
         return np.clip(decoded, 0, 255).astype("uint8")
 
+    # e_t -> latent | x -> latent -> latent_prev
     def _get_x_prev(self, x, e_t, a_t, a_prev):
         sqrt_one_minus_at = math.sqrt(1 - a_t)
         pred_x0 = (x - sqrt_one_minus_at * e_t) / math.sqrt(a_t)
@@ -572,9 +622,12 @@ class StableDiffusion:
         x_prev = math.sqrt(a_prev) * pred_x0 + dir_xt
         return x_prev
 
+    @staticmethod
+    def _get_pos_ids():
+        return tf.convert_to_tensor([list(range(MAX_PROMPT_LENGTH))], dtype=tf.int32)
+
 
 def get_models(
-    strategy: tf.distribute,
     img_height: int,
     img_width: int,
     download_weights: bool = True,
@@ -583,8 +636,6 @@ def get_models(
 
     Parameters
     ----------
-    strategy : tf.distribute
-        TensorFlow strategy for running computations across multiple devices.
     img_height : int
         Image hight.
     img_width : int
@@ -597,20 +648,18 @@ def get_models(
     Union[tf.keras.Model, tf.keras.Model, tf.keras.Model, tf.keras.Model]
         The text encoder, diffusion model, decoder and encoder model's
     """
-    with strategy.scope():
+    # Create text encoder
+    text_encoder = TextEncoder(MAX_PROMPT_LENGTH, download_weights=download_weights)
 
-        # Create text encoder
-        text_encoder = TextEncoder(MAX_TEXT_LEN, download_weights=download_weights)
+    # Creation diffusion UNet
+    diffusion_model = DiffusionModel(
+        img_height, img_width, MAX_PROMPT_LENGTH, download_weights=download_weights
+    )
 
-        # Creation diffusion UNet
-        diffusion_model = DiffusionModel(
-            img_height, img_width, MAX_TEXT_LEN, download_weights=download_weights
-        )
+    # Create decoder
+    decoder = Decoder(img_height, img_width, download_weights=download_weights)
 
-        # Create decoder
-        decoder = Decoder(img_height, img_width, download_weights=download_weights)
-
-        # Create encoder
-        encoder = ImageEncoder(img_height, img_width, download_weights=download_weights)
+    # Create encoder
+    encoder = ImageEncoder(img_height, img_width, download_weights=download_weights)
 
     return text_encoder, diffusion_model, decoder, encoder
