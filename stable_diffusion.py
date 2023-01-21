@@ -30,9 +30,12 @@ from keras_cv.models.stable_diffusion.constants import (
     _UNCONDITIONAL_TOKENS,
 )
 from keras_cv.models.stable_diffusion.decoder import Decoder
-from keras_cv.models.stable_diffusion.diffusion_model import DiffusionModel
+from keras_cv.models.stable_diffusion.diffusion_model import (
+    DiffusionModel,
+    DiffusionModelV2,
+)
 from keras_cv.models.stable_diffusion.image_encoder import ImageEncoder
-from keras_cv.models.stable_diffusion.text_encoder import TextEncoder
+from keras_cv.models.stable_diffusion.text_encoder import TextEncoder, TextEncoderV2
 from tensorflow import keras
 
 import ptp_utils
@@ -41,7 +44,7 @@ MAX_PROMPT_LENGTH = 77
 NUM_TRAIN_TIMESTEPS = 1000
 
 
-class StableDiffusion:
+class StableDiffusionBase:
     """Implementation of Stable Diffusion and Prompt-to-Prompt papers in TensorFlow/Keras.
 
     Parameters
@@ -100,36 +103,23 @@ class StableDiffusion:
         img_height: int = 512,
         img_width: int = 512,
         jit_compile: bool = False,
-        download_weights: bool = True,
     ):
+
         # UNet requires multiples of 2**7 = 128
         img_height = round(img_height / 128) * 128
         img_width = round(img_width / 128) * 128
         self.img_height = img_height
         self.img_width = img_width
 
-        self.tokenizer = SimpleTokenizer()
+        # lazy initialize the component models and the tokenizer
+        self._image_encoder = None
+        self._text_encoder = None
+        self._diffusion_model = None
+        self._diffusion_model_ptp = None
+        self._decoder = None
+        self._tokenizer = None
 
-        text_encoder, diffusion_model, decoder, encoder = get_models(
-            img_height, img_width, download_weights=download_weights
-        )
-        self.text_encoder = text_encoder
-        self.diffusion_model = diffusion_model
-        self.decoder = decoder
-        self.encoder = encoder
-
-        if jit_compile:
-            self.text_encoder.compile(jit_compile=True)
-            self.diffusion_model.compile(jit_compile=True)
-            self.decoder.compile(jit_compile=True)
-            self.encoder.compile(jit_compile=True)
-
-        # Add extra variables and callbacks
-        self.diffusion_model = ptp_utils.rename_cross_attention_layers(
-            self.diffusion_model
-        )
-        self.diffusion_model = ptp_utils.overwrite_forward_call(self.diffusion_model)
-        self.diffusion_model = ptp_utils.set_initial_tf_variables(self.diffusion_model)
+        self.jit_compile = jit_compile
 
     def text_to_image(
         self,
@@ -137,7 +127,6 @@ class StableDiffusion:
         negative_prompt: Optional[str] = None,
         num_steps: int = 50,
         unconditional_guidance_scale: float = 7.5,
-        prompt_weights: np.ndarray = np.array([]),
         batch_size: int = 1,
         seed: Optional[int] = None,
     ) -> np.ndarray:
@@ -155,10 +144,6 @@ class StableDiffusion:
             Number of diffusion steps (controls image quality), by default 50.
         unconditional_guidance_scale : float, optional
             Controls how closely the image should adhere to the prompt, by default 7.5.
-        prompt_weights : List[float], optional
-            Set of weights for each prompt token.
-            This is used for manipulating the importance of the prompt tokens,
-            increasing or decreasing the importance assigned to each word.
         batch_size : int, optional
             Batch size (number of images to generate), by default 1.
         seed : Optional[int], optional
@@ -183,15 +168,6 @@ class StableDiffusion:
             unconditional_context = self.encode_text(negative_prompt)
             unconditional_context = self._expand_tensor(
                 unconditional_context, batch_size
-            )
-
-        # Update prompt weights variable
-        if prompt_weights.size:
-            self.diffusion_model = ptp_utils.add_prompt_weights(
-                diff_model=self.diffusion_model, prompt_weights=prompt_weights
-            )
-            self.diffusion_model = ptp_utils.update_prompt_weights_usage(
-                diff_model=self.diffusion_model, use=True
             )
 
         # Get initial random noise
@@ -234,11 +210,6 @@ class StableDiffusion:
 
         # Decode image
         img = self._get_decoding_stage(latent)
-
-        # Reset control variables
-        self.diffusion_model = ptp_utils.reset_initial_tf_variables(
-            self.diffusion_model
-        )
 
         return img
 
@@ -386,14 +357,14 @@ class StableDiffusion:
             )
 
             # Add the mask and indices to the diffusion model
-            self.diffusion_model = ptp_utils.put_mask_dif_model(
-                self.diffusion_model, mask, indices
+            self._diffusion_model_ptp = ptp_utils.put_mask_dif_model(
+                self.diffusion_model_ptp, mask, indices
             )
 
         # Update prompt weights variable
         if attn_edit_weights.size:
-            self.diffusion_model = ptp_utils.add_prompt_weights(
-                diff_model=self.diffusion_model, prompt_weights=attn_edit_weights
+            self._diffusion_model_ptp = ptp_utils.add_prompt_weights(
+                diff_model=self.diffusion_model_ptp, prompt_weights=attn_edit_weights
             )
 
         # Get initial random noise
@@ -417,21 +388,21 @@ class StableDiffusion:
             t_scale = 1 - (timestep / NUM_TRAIN_TIMESTEPS)
 
             # Update Cross-Attention mode to 'unconditional'
-            self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                diff_model=self.diffusion_model, mode="unconditional"
+            self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                diff_model=self.diffusion_model_ptp, mode="unconditional"
             )
 
             # Predict the unconditional noise residual
-            unconditional_latent = self.diffusion_model.predict_on_batch(
+            unconditional_latent = self.diffusion_model_ptp.predict_on_batch(
                 [latent, t_emb, unconditional_context]
             )
 
             # Save last cross attention activations
-            self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                diff_model=self.diffusion_model, mode="save"
+            self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                diff_model=self.diffusion_model_ptp, mode="save"
             )
             # Predict the conditional noise residual
-            _ = self.diffusion_model.predict_on_batch(
+            _ = self.diffusion_model_ptp.predict_on_batch(
                 [latent, t_emb, conditional_context]
             )
 
@@ -440,21 +411,21 @@ class StableDiffusion:
             if cross_attn_steps[0] <= t_scale <= cross_attn_steps[1]:
                 if method == "replace":
                     # Use cross attention from the original prompt (M_t)
-                    self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                        diff_model=self.diffusion_model,
+                    self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                        diff_model=self.diffusion_model_ptp,
                         mode="use_last",
                         attn_suffix="attn2",
                     )
                 elif method == "refine":
-                    self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                        diff_model=self.diffusion_model,
+                    self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                        diff_model=self.diffusion_model_ptp,
                         mode="edit",
                         attn_suffix="attn2",
                     )
             else:
                 # Use cross attention from the edited prompt (M^*_t)
-                self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model,
+                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                    diff_model=self.diffusion_model_ptp,
                     mode="injection",
                     attn_suffix="attn2",
                 )
@@ -462,21 +433,21 @@ class StableDiffusion:
             # Edit the self-Attention layer activations
             if self_attn_steps[0] <= t_scale <= self_attn_steps[1]:
                 # Use self attention from the original prompt (M_t)
-                self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model,
+                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                    diff_model=self.diffusion_model_ptp,
                     mode="use_last",
                     attn_suffix="attn1",
                 )
             else:
                 # Use self attention from the edited prompt (M^*_t)
-                self.diffusion_model = ptp_utils.update_cross_attn_mode(
-                    diff_model=self.diffusion_model,
+                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                    diff_model=self.diffusion_model_ptp,
                     mode="injection",
                     attn_suffix="attn1",
                 )
 
             # Predict the edited conditional noise residual
-            conditional_latent_edit = self.diffusion_model.predict_on_batch(
+            conditional_latent_edit = self.diffusion_model_ptp.predict_on_batch(
                 [latent, t_emb, conditional_context_edit],
             )
 
@@ -495,8 +466,8 @@ class StableDiffusion:
         img = self._get_decoding_stage(latent)
 
         # Reset control variables
-        self.diffusion_model = ptp_utils.reset_initial_tf_variables(
-            self.diffusion_model
+        self._diffusion_model_ptp = ptp_utils.reset_initial_tf_variables(
+            self.diffusion_model_ptp
         )
 
         return img
@@ -626,40 +597,261 @@ class StableDiffusion:
     def _get_pos_ids():
         return tf.convert_to_tensor([list(range(MAX_PROMPT_LENGTH))], dtype=tf.int32)
 
+    @property
+    def image_encoder(self):
+        """image_encoder returns the VAE Encoder with pretrained weights.
+        Usage:
+        ```python
+        sd = keras_cv.models.StableDiffusion()
+        my_image = np.ones((512, 512, 3))
+        latent_representation = sd.image_encoder.predict(my_image)
+        ```
+        """
+        if self._image_encoder is None:
+            self._image_encoder = ImageEncoder(self.img_height, self.img_width)
+            if self.jit_compile:
+                self._image_encoder.compile(jit_compile=True)
+        return self._image_encoder
 
-def get_models(
-    img_height: int,
-    img_width: int,
-    download_weights: bool = True,
-) -> Union[tf.keras.Model, tf.keras.Model, tf.keras.Model, tf.keras.Model]:
-    """Load and download the models weights.
+    @property
+    def text_encoder(self):
+        pass
 
-    Parameters
-    ----------
-    img_height : int
-        Image hight.
-    img_width : int
-        Image width.
-    download_weights : bool, optional
-        Flag used to download the models weights, by default True.
+    @property
+    def diffusion_model(self):
+        pass
 
-    Returns
-    -------
-    Union[tf.keras.Model, tf.keras.Model, tf.keras.Model, tf.keras.Model]
-        The text encoder, diffusion model, decoder and encoder model's
-    """
-    # Create text encoder
-    text_encoder = TextEncoder(MAX_PROMPT_LENGTH, download_weights=download_weights)
+    @property
+    def decoder(self):
+        """decoder returns the diffusion image decoder model with pretrained weights.
+        Can be overriden for tasks where the decoder needs to be modified.
+        """
+        if self._decoder is None:
+            self._decoder = Decoder(self.img_height, self.img_width)
+            if self.jit_compile:
+                self._decoder.compile(jit_compile=True)
+        return self._decoder
 
-    # Creation diffusion UNet
-    diffusion_model = DiffusionModel(
-        img_height, img_width, MAX_PROMPT_LENGTH, download_weights=download_weights
+    @property
+    def tokenizer(self):
+        """tokenizer returns the tokenizer used for text inputs.
+        Can be overriden for tasks like textual inversion where the tokenizer needs to be modified.
+        """
+        if self._tokenizer is None:
+            self._tokenizer = SimpleTokenizer()
+        return self._tokenizer
+
+
+class StableDiffusion(StableDiffusionBase):
+    """Keras implementation of Stable Diffusion.
+
+    Note that the StableDiffusion API, as well as the APIs of the sub-components
+    of StableDiffusion (e.g. ImageEncoder, DiffusionModel) should be considered
+    unstable at this point. We do not guarantee backwards compatability for
+    future changes to these APIs.
+    Stable Diffusion is a powerful image generation model that can be used,
+    among other things, to generate pictures according to a short text description
+    (called a "prompt").
+    Arguments:
+        img_height: Height of the images to generate, in pixel. Note that only
+            multiples of 128 are supported; the value provided will be rounded
+            to the nearest valid value. Default: 512.
+        img_width: Width of the images to generate, in pixel. Note that only
+            multiples of 128 are supported; the value provided will be rounded
+            to the nearest valid value. Default: 512.
+        jit_compile: Whether to compile the underlying models to XLA.
+            This can lead to a significant speedup on some systems. Default: False.
+    Example:
+    ```python
+    from keras_cv.models import StableDiffusion
+    from PIL import Image
+    model = StableDiffusion(img_height=512, img_width=512, jit_compile=True)
+    img = model.text_to_image(
+        prompt="A beautiful horse running through a field",
+        batch_size=1,  # How many images to generate at once
+        num_steps=25,  # Number of iterations (controls image quality)
+        seed=123,  # Set this to always get the same image from the same prompt
     )
+    Image.fromarray(img[0]).save("horse.png")
+    print("saved at horse.png")
+    ```
+    References:
+    - [About Stable Diffusion](https://stability.ai/blog/stable-diffusion-announcement)
+    - [Original implementation](https://github.com/CompVis/stable-diffusion)
+    """
 
-    # Create decoder
-    decoder = Decoder(img_height, img_width, download_weights=download_weights)
+    def __init__(
+        self,
+        img_height=512,
+        img_width=512,
+        jit_compile=False,
+    ):
+        super().__init__(img_height, img_width, jit_compile)
+        print(
+            "By using this model checkpoint, you acknowledge that its usage is "
+            "subject to the terms of the CreativeML Open RAIL-M license at "
+            "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/LICENSE"
+        )
 
-    # Create encoder
-    encoder = ImageEncoder(img_height, img_width, download_weights=download_weights)
+    @property
+    def text_encoder(self):
+        """text_encoder returns the text encoder with pretrained weights.
+        Can be overriden for tasks like textual inversion where the text encoder
+        needs to be modified.
+        """
+        if self._text_encoder is None:
+            self._text_encoder = TextEncoder(MAX_PROMPT_LENGTH)
+            if self.jit_compile:
+                self._text_encoder.compile(jit_compile=True)
+        return self._text_encoder
 
-    return text_encoder, diffusion_model, decoder, encoder
+    @property
+    def diffusion_model(self) -> tf.keras.Model:
+        """diffusion_model returns the diffusion model with pretrained weights.
+        Can be overriden for tasks where the diffusion model needs to be modified.
+        """
+        if self._diffusion_model is None:
+            self._diffusion_model = DiffusionModel(
+                self.img_height, self.img_width, MAX_PROMPT_LENGTH
+            )
+            if self.jit_compile:
+                self._diffusion_model.compile(jit_compile=True)
+        return self._diffusion_model
+
+    @property
+    def diffusion_model_ptp(self) -> tf.keras.Model:
+        """diffusion_model_ptp returns the diffusion model with modifications for the Prompt-to-Prompt method.
+
+        References
+        ----------
+        - "Prompt-to-Prompt Image Editing with Cross-Attention Control."
+        Amir Hertz, Ron Mokady, Jay Tenenbaum, Kfir Aberman, Yael Pritch, Daniel Cohen-Or.
+        https://arxiv.org/abs/2208.01626
+        """
+        if self._diffusion_model_ptp is None:
+            if self._diffusion_model is None:
+                self._diffusion_model_ptp = self.diffusion_model()
+            else:
+                # Reset the graph - this is to save up memory
+                self._diffusion_model.compile(jit_compile=self.jit_compile)
+                self._diffusion_model_ptp = self._diffusion_model
+
+            # Add extra variables and callbacks
+            self._diffusion_model_ptp = ptp_utils.rename_cross_attention_layers(
+                self._diffusion_model_ptp
+            )
+            self._diffusion_model_ptp = ptp_utils.overwrite_forward_call(
+                self._diffusion_model_ptp
+            )
+            self._diffusion_model_ptp = ptp_utils.set_initial_tf_variables(
+                self._diffusion_model_ptp
+            )
+
+        return self._diffusion_model_ptp
+
+
+class StableDiffusionV2(StableDiffusionBase):
+    """Keras implementation of Stable Diffusion v2.
+    Note that the StableDiffusion API, as well as the APIs of the sub-components
+    of StableDiffusionV2 (e.g. ImageEncoder, DiffusionModelV2) should be considered
+    unstable at this point. We do not guarantee backwards compatability for
+    future changes to these APIs.
+    Stable Diffusion is a powerful image generation model that can be used,
+    among other things, to generate pictures according to a short text description
+    (called a "prompt").
+    Arguments:
+        img_height: Height of the images to generate, in pixel. Note that only
+            multiples of 128 are supported; the value provided will be rounded
+            to the nearest valid value. Default: 512.
+        img_width: Width of the images to generate, in pixel. Note that only
+            multiples of 128 are supported; the value provided will be rounded
+            to the nearest valid value. Default: 512.
+        jit_compile: Whether to compile the underlying models to XLA.
+            This can lead to a significant speedup on some systems. Default: False.
+    Example:
+    ```python
+    from keras_cv.models import StableDiffusionV2
+    from PIL import Image
+    model = StableDiffusionV2(img_height=512, img_width=512, jit_compile=True)
+    img = model.text_to_image(
+        prompt="A beautiful horse running through a field",
+        batch_size=1,  # How many images to generate at once
+        num_steps=25,  # Number of iterations (controls image quality)
+        seed=123,  # Set this to always get the same image from the same prompt
+    )
+    Image.fromarray(img[0]).save("horse.png")
+    print("saved at horse.png")
+    ```
+    References:
+    - [About Stable Diffusion](https://stability.ai/blog/stable-diffusion-announcement)
+    - [Original implementation](https://github.com/Stability-AI/stablediffusion)
+    """
+
+    def __init__(
+        self,
+        img_height=512,
+        img_width=512,
+        jit_compile=False,
+    ):
+        super().__init__(img_height, img_width, jit_compile)
+        print(
+            "By using this model checkpoint, you acknowledge that its usage is "
+            "subject to the terms of the CreativeML Open RAIL++-M license at "
+            "https://github.com/Stability-AI/stablediffusion/main/LICENSE-MODEL"
+        )
+
+    @property
+    def text_encoder(self):
+        """text_encoder returns the text encoder with pretrained weights.
+        Can be overriden for tasks like textual inversion where the text encoder
+        needs to be modified.
+        """
+        if self._text_encoder is None:
+            self._text_encoder = TextEncoderV2(MAX_PROMPT_LENGTH)
+            if self.jit_compile:
+                self._text_encoder.compile(jit_compile=True)
+        return self._text_encoder
+
+    @property
+    def diffusion_model(self) -> tf.keras.Model:
+        """diffusion_model returns the diffusion model with pretrained weights.
+        Can be overriden for tasks where the diffusion model needs to be modified.
+        """
+        if self._diffusion_model is None:
+            self._diffusion_model = DiffusionModelV2(
+                self.img_height, self.img_width, MAX_PROMPT_LENGTH
+            )
+            if self.jit_compile:
+                self._diffusion_model.compile(jit_compile=True)
+        return self._diffusion_model
+
+    @property
+    def diffusion_model_ptp(self) -> tf.keras.Model:
+        """diffusion_model_ptp returns the diffusion model with modifications for the Prompt-to-Prompt method.
+
+        References
+        ----------
+        - "Prompt-to-Prompt Image Editing with Cross-Attention Control."
+        Amir Hertz, Ron Mokady, Jay Tenenbaum, Kfir Aberman, Yael Pritch, Daniel Cohen-Or.
+        https://arxiv.org/abs/2208.01626
+        """
+        if self._diffusion_model_ptp is None:
+            if self._diffusion_model is None:
+                self._diffusion_model_ptp = self.diffusion_model()
+            else:
+                # Reset the graph - this is to save up memory
+                self._diffusion_model.compile(jit_compile=self.jit_compile)
+                self._diffusion_model_ptp = self._diffusion_model
+
+            # Add extra variables and callbacks
+            self._diffusion_model_ptp = ptp_utils.rename_cross_attention_layers(
+                self._diffusion_model_ptp
+            )
+            self._diffusion_model_ptp = ptp_utils.overwrite_forward_call(
+                self._diffusion_model_ptp
+            )
+            self._diffusion_model_ptp = ptp_utils.set_initial_tf_variables(
+                self._diffusion_model_ptp
+            )
+
+        return self._diffusion_model_ptp
