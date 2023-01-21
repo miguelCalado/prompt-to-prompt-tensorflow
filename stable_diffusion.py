@@ -730,7 +730,7 @@ class StableDiffusion(StableDiffusionBase):
         """
         if self._diffusion_model_ptp is None:
             if self._diffusion_model is None:
-                self._diffusion_model_ptp = self.diffusion_model()
+                self._diffusion_model_ptp = self.diffusion_model
             else:
                 # Reset the graph - this is to save up memory
                 self._diffusion_model.compile(jit_compile=self.jit_compile)
@@ -837,7 +837,7 @@ class StableDiffusionV2(StableDiffusionBase):
         """
         if self._diffusion_model_ptp is None:
             if self._diffusion_model is None:
-                self._diffusion_model_ptp = self.diffusion_model()
+                self._diffusion_model_ptp = self.diffusion_model
             else:
                 # Reset the graph - this is to save up memory
                 self._diffusion_model.compile(jit_compile=self.jit_compile)
