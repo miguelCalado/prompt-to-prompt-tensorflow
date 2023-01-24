@@ -360,7 +360,7 @@ class StableDiffusionBase:
 
         # Update prompt weights variable
         if attn_edit_weights.size:
-            self._diffusion_model_ptp = ptp_utils.add_prompt_weights(
+            self._diffusion_model_ptp = ptp_utils.add_attn_weights(
                 diff_model=self.diffusion_model_ptp, prompt_weights=attn_edit_weights
             )
 
@@ -403,7 +403,6 @@ class StableDiffusionBase:
                 [latent, t_emb, conditional_context]
             )
 
-            # TODO: # if method=='reweigh':
             # Edit the Cross-Attention layer activations
             if cross_attn_steps[0] <= t_scale <= cross_attn_steps[1]:
                 if method == "replace":
@@ -419,6 +418,12 @@ class StableDiffusionBase:
                         mode="edit",
                         attn_suffix="attn2",
                     )
+                if method == "reweight" or attn_edit_weights.size:
+                    # Use the parsed weights on the edited prompt
+                    self._diffusion_model_ptp = ptp_utils.update_attn_weights_usage(
+                        diff_model=self.diffusion_model_ptp, use=True
+                    )
+
             else:
                 # Use cross attention from the edited prompt (M^*_t)
                 self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
@@ -447,6 +452,12 @@ class StableDiffusionBase:
             conditional_latent_edit = self.diffusion_model_ptp.predict_on_batch(
                 [latent, t_emb, conditional_context_edit],
             )
+
+            # Assign usage to False so it doesn't get used in other contexts
+            if attn_edit_weights.size:
+                self._diffusion_model_ptp = ptp_utils.update_attn_weights_usage(
+                    diff_model=self.diffusion_model_ptp, use=False
+                )
 
             # Perform guidance
             e_t = unconditional_latent + unconditional_guidance_scale * (

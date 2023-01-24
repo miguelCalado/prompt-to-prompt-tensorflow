@@ -84,9 +84,7 @@ def update_cross_attn_mode(
     return diff_model
 
 
-def update_prompt_weights_usage(
-    diff_model: tf.keras.Model, use: bool
-) -> tf.keras.Model:
+def update_attn_weights_usage(diff_model: tf.keras.Model, use: bool) -> tf.keras.Model:
     """Update the mode control variable.
 
     Parameters
@@ -111,17 +109,17 @@ def update_prompt_weights_usage(
     return diff_model
 
 
-def add_prompt_weights(
+def add_attn_weights(
     diff_model: tf.keras.Model, prompt_weights: np.ndarray
 ) -> tf.keras.Model:
-    """Assign the prompt weights to the diffusion model's corresponding tf.variable.
+    """Assign the attention weights to the diffusion model's corresponding tf.variable.
 
     Parameters
     ----------
     diff_model : tf.keras.Model
         Diffusion model.
     prompt_weights : List
-        Weights of the prompt tokens.
+        Weights of the attention tokens.
 
     Returns
     -------
