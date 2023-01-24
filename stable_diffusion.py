@@ -350,12 +350,9 @@ class StableDiffusionBase:
 
         if method == "refine":
             # Get the mask and indices of the difference between the original prompt token's and the edited one
-            tokens_conditional = self.tokenize_prompt(prompt)
-            tokens_conditional_edit = self.tokenize_prompt(prompt_edit)
             mask, indices = ptp_utils.get_matching_sentence_tokens(
-                tokens_conditional[0].numpy(), tokens_conditional_edit[0].numpy()
+                prompt, prompt_edit, self.tokenizer
             )
-
             # Add the mask and indices to the diffusion model
             self._diffusion_model_ptp = ptp_utils.put_mask_dif_model(
                 self.diffusion_model_ptp, mask, indices
@@ -837,7 +834,7 @@ class StableDiffusionV2(StableDiffusionBase):
         """
         if self._diffusion_model_ptp is None:
             if self._diffusion_model is None:
-                self._diffusion_model_ptp = self.diffusion_model
+                self._diffusion_model_ptp = self.diffusion_model()
             else:
                 # Reset the graph - this is to save up memory
                 self._diffusion_model.compile(jit_compile=self.jit_compile)
