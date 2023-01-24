@@ -12,13 +12,14 @@ Credits
   and code logic were used: [bloc97/CrossAttentionControl](https://github.com/bloc97/CrossAttentionControl).
 """
 
-from difflib import SequenceMatcher
 from typing import Tuple
 
 import numpy as np
 import tensorflow as tf
 from keras_cv.models.stable_diffusion.diffusion_model import td_dot
 from tensorflow import keras
+
+import seq_aligner
 
 MAX_TEXT_LEN = 77
 
@@ -168,7 +169,7 @@ def put_mask_dif_model(
 
 
 def get_matching_sentence_tokens(
-    tokens: np.ndarray, tokens_edit: np.ndarray
+    prompt, prompt_edit, tokenizer
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Create the mask and indices of the overlap between the tokens of the original \
     prompt and the edited one.
@@ -187,18 +188,9 @@ def get_matching_sentence_tokens(
     Tuple[np.ndarray, np.ndarray]
         Mask and indices of the overlap between the original token and edit prompts.
     """
-    mask = np.zeros(MAX_TEXT_LEN)
-    indices_target = np.arange(MAX_TEXT_LEN)
-    indices = np.zeros(MAX_TEXT_LEN) - 1
-
-    for name, a0, a1, b0, b1 in SequenceMatcher(
-        None, tokens, tokens_edit
-    ).get_opcodes():
-        if b0 < MAX_TEXT_LEN and (
-            name == "equal" or (name == "replace" and a1 - a0 == b1 - b0)
-        ):
-            mask[b0:b1] = 1
-            indices[b0:b1] = indices_target[a0:a1]
+    tokens_conditional = tokenizer.encode(prompt)
+    tokens_conditional_edit = tokenizer.encode(prompt_edit)
+    mask, indices = seq_aligner.get_mapper(tokens_conditional, tokens_conditional_edit)
     return mask, indices
 
 
