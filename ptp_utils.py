@@ -54,7 +54,7 @@ def rename_cross_attention_layers(diff_model: tf.keras.Model) -> tf.keras.Model:
 
 def update_cross_attn_mode(
     diff_model: tf.keras.Model, mode: str, attn_suffix: str = "attn"
-) -> tf.keras.Model:
+):
     """Update the mode control variable.
 
     Parameters
@@ -68,11 +68,6 @@ def update_cross_attn_mode(
             - unconditional: to perform the standard attention computations.
     attn_suffix : str, optional
         Suffix used to find the attention layer, by default "attn".
-
-    Returns
-    -------
-    tf.keras.Model
-        Diffusion model.
     """
     for submodule in diff_model.submodules:
         submodule_name = submodule.name
@@ -81,10 +76,9 @@ def update_cross_attn_mode(
             and attn_suffix in submodule_name.split("_")[-1]
         ):
             submodule.cross_attn_mode.assign(mode)
-    return diff_model
 
 
-def update_attn_weights_usage(diff_model: tf.keras.Model, use: bool) -> tf.keras.Model:
+def update_attn_weights_usage(diff_model: tf.keras.Model, use: bool):
     """Update the mode control variable.
 
     Parameters
@@ -93,11 +87,6 @@ def update_attn_weights_usage(diff_model: tf.keras.Model, use: bool) -> tf.keras
         Diffusion model.
     use : bool
         Whether to use the prompt weights.
-
-    Returns
-    -------
-    tf.keras.Model
-        Diffusion model.
     """
     for submodule in diff_model.submodules:
         submodule_name = submodule.name
@@ -106,12 +95,9 @@ def update_attn_weights_usage(diff_model: tf.keras.Model, use: bool) -> tf.keras
             and "attn2" in submodule_name.split("_")[-1]
         ):
             submodule.use_prompt_weights.assign(use)
-    return diff_model
 
 
-def add_attn_weights(
-    diff_model: tf.keras.Model, prompt_weights: np.ndarray
-) -> tf.keras.Model:
+def add_attn_weights(diff_model: tf.keras.Model, prompt_weights: np.ndarray):
     """Assign the attention weights to the diffusion model's corresponding tf.variable.
 
     Parameters
@@ -120,11 +106,6 @@ def add_attn_weights(
         Diffusion model.
     prompt_weights : List
         Weights of the attention tokens.
-
-    Returns
-    -------
-    tf.keras.Model
-        Diffusion model.
     """
     for submodule in diff_model.submodules:
         submodule_name = submodule.name
@@ -133,12 +114,11 @@ def add_attn_weights(
             and "attn2" in submodule_name.split("_")[-1]
         ):
             submodule.prompt_weights.assign(prompt_weights)
-    return diff_model
 
 
 def put_mask_dif_model(
     diff_model: tf.keras.Model, mask: np.ndarray, indices: np.ndarray
-) -> tf.keras.Model:
+):
     """Assign the diffusion model's tf.variables with the passed mask and indices.
 
     Parameters
@@ -149,11 +129,6 @@ def put_mask_dif_model(
         Mask of the original and edited prompt overlap.
     indices : np.ndarray
         Indices of the original and edited prompt overlap.
-
-    Returns
-    -------
-    tf.keras.Model
-        Diffusion model.
     """
     for submodule in diff_model.submodules:
         submodule_name = submodule.name
@@ -163,7 +138,6 @@ def put_mask_dif_model(
         ):
             submodule.prompt_edit_mask.assign(mask)
             submodule.prompt_edit_indices.assign(indices)
-    return diff_model
 
 
 def get_matching_sentence_tokens(
@@ -231,17 +205,12 @@ def set_initial_tf_variables(diff_model: tf.keras.Model) -> tf.keras.Model:
     return diff_model
 
 
-def reset_initial_tf_variables(diff_model: tf.keras.Model) -> tf.keras.Model:
+def reset_initial_tf_variables(diff_model: tf.keras.Model):
     """Reset the control variables to their default values.
 
     Parameters
     ----------
     diff_model : tf.keras.Model
-        Diffusion model.
-
-    Returns
-    -------
-    tf.keras.Model
         Diffusion model.
     """
     for submodule in diff_model.submodules:
@@ -255,7 +224,6 @@ def reset_initial_tf_variables(diff_model: tf.keras.Model) -> tf.keras.Model:
             submodule.prompt_edit_mask.assign([])
             submodule.prompt_edit_indices.assign([])
             submodule.prompt_weights.assign([])
-    return diff_model
 
 
 def overwrite_forward_call(diff_model: tf.keras.Model) -> tf.keras.Model:

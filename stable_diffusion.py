@@ -354,13 +354,11 @@ class StableDiffusionBase:
                 prompt, prompt_edit, self.tokenizer
             )
             # Add the mask and indices to the diffusion model
-            self._diffusion_model_ptp = ptp_utils.put_mask_dif_model(
-                self.diffusion_model_ptp, mask, indices
-            )
+            ptp_utils.put_mask_dif_model(self.diffusion_model_ptp, mask, indices)
 
         # Update prompt weights variable
         if attn_edit_weights.size:
-            self._diffusion_model_ptp = ptp_utils.add_attn_weights(
+            ptp_utils.add_attn_weights(
                 diff_model=self.diffusion_model_ptp, prompt_weights=attn_edit_weights
             )
 
@@ -385,7 +383,7 @@ class StableDiffusionBase:
             t_scale = 1 - (timestep / NUM_TRAIN_TIMESTEPS)
 
             # Update Cross-Attention mode to 'unconditional'
-            self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+            ptp_utils.update_cross_attn_mode(
                 diff_model=self.diffusion_model_ptp, mode="unconditional"
             )
 
@@ -395,7 +393,7 @@ class StableDiffusionBase:
             )
 
             # Save last cross attention activations
-            self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+            ptp_utils.update_cross_attn_mode(
                 diff_model=self.diffusion_model_ptp, mode="save"
             )
             # Predict the conditional noise residual
@@ -407,26 +405,26 @@ class StableDiffusionBase:
             if cross_attn_steps[0] <= t_scale <= cross_attn_steps[1]:
                 if method == "replace":
                     # Use cross attention from the original prompt (M_t)
-                    self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                    ptp_utils.update_cross_attn_mode(
                         diff_model=self.diffusion_model_ptp,
                         mode="use_last",
                         attn_suffix="attn2",
                     )
                 elif method == "refine":
-                    self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                    ptp_utils.update_cross_attn_mode(
                         diff_model=self.diffusion_model_ptp,
                         mode="edit",
                         attn_suffix="attn2",
                     )
                 if method == "reweight" or attn_edit_weights.size:
                     # Use the parsed weights on the edited prompt
-                    self._diffusion_model_ptp = ptp_utils.update_attn_weights_usage(
+                    ptp_utils.update_attn_weights_usage(
                         diff_model=self.diffusion_model_ptp, use=True
                     )
 
             else:
                 # Use cross attention from the edited prompt (M^*_t)
-                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                ptp_utils.update_cross_attn_mode(
                     diff_model=self.diffusion_model_ptp,
                     mode="injection",
                     attn_suffix="attn2",
@@ -435,14 +433,14 @@ class StableDiffusionBase:
             # Edit the self-Attention layer activations
             if self_attn_steps[0] <= t_scale <= self_attn_steps[1]:
                 # Use self attention from the original prompt (M_t)
-                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                ptp_utils.update_cross_attn_mode(
                     diff_model=self.diffusion_model_ptp,
                     mode="use_last",
                     attn_suffix="attn1",
                 )
             else:
                 # Use self attention from the edited prompt (M^*_t)
-                self._diffusion_model_ptp = ptp_utils.update_cross_attn_mode(
+                ptp_utils.update_cross_attn_mode(
                     diff_model=self.diffusion_model_ptp,
                     mode="injection",
                     attn_suffix="attn1",
@@ -455,7 +453,7 @@ class StableDiffusionBase:
 
             # Assign usage to False so it doesn't get used in other contexts
             if attn_edit_weights.size:
-                self._diffusion_model_ptp = ptp_utils.update_attn_weights_usage(
+                ptp_utils.update_attn_weights_usage(
                     diff_model=self.diffusion_model_ptp, use=False
                 )
 
@@ -474,9 +472,7 @@ class StableDiffusionBase:
         img = self._get_decoding_stage(latent)
 
         # Reset control variables
-        self._diffusion_model_ptp = ptp_utils.reset_initial_tf_variables(
-            self.diffusion_model_ptp
-        )
+        ptp_utils.reset_initial_tf_variables(self.diffusion_model_ptp)
 
         return img
 
