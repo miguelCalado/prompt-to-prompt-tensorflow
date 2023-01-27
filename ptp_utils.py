@@ -24,7 +24,7 @@ import seq_aligner
 MAX_TEXT_LEN = 77
 
 
-def rename_cross_attention_layers(diff_model: tf.keras.Model) -> tf.keras.Model:
+def rename_cross_attention_layers(diff_model: tf.keras.Model):
     """Add suffix to the cross attention layers.
 
     This becomes useful when using the prompt editing method to save the
@@ -49,7 +49,6 @@ def rename_cross_attention_layers(diff_model: tf.keras.Model) -> tf.keras.Model:
         elif cross_attention_count % 2 and "cross_attention" in submodule_name:
             submodule._name = f"{submodule_name}_attn2"
             cross_attention_count += 1
-    return diff_model
 
 
 def update_cross_attn_mode(
@@ -166,17 +165,12 @@ def get_matching_sentence_tokens(
     return mask, indices
 
 
-def set_initial_tf_variables(diff_model: tf.keras.Model) -> tf.keras.Model:
+def set_initial_tf_variables(diff_model: tf.keras.Model):
     """Create initial control variables to auxiliate the prompt editing method.
 
     Parameters
     ----------
     diff_model : tf.keras.Model
-        Diffusion model.
-
-    Returns
-    -------
-    tf.keras.Model
         Diffusion model.
     """
     for submodule in diff_model.submodules:
@@ -202,7 +196,6 @@ def set_initial_tf_variables(diff_model: tf.keras.Model) -> tf.keras.Model:
             submodule.prompt_weights = tf.Variable(
                 [], shape=tf.TensorShape(None), dtype=tf.float32, trainable=False
             )
-    return diff_model
 
 
 def reset_initial_tf_variables(diff_model: tf.keras.Model):
@@ -226,17 +219,12 @@ def reset_initial_tf_variables(diff_model: tf.keras.Model):
             submodule.prompt_weights.assign([])
 
 
-def overwrite_forward_call(diff_model: tf.keras.Model) -> tf.keras.Model:
+def overwrite_forward_call(diff_model: tf.keras.Model):
     """Update the attention forward pass with a custom call method.
 
     Parameters
     ----------
     diff_model : tf.keras.Model
-        Diffusion model.
-
-    Returns
-    -------
-    tf.keras.Model
         Diffusion model.
     """
     for submodule in diff_model.submodules:
@@ -244,7 +232,6 @@ def overwrite_forward_call(diff_model: tf.keras.Model) -> tf.keras.Model:
         if "cross_attention" in submodule_name:
             # Overwrite forward pass method
             submodule.call = call_attn_edit.__get__(submodule)
-    return diff_model
 
 
 def call_attn_edit(self, inputs):
