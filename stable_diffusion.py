@@ -174,7 +174,6 @@ class StableDiffusionBase:
         latent = self._get_initial_diffusion_noise(batch_size, seed)
 
         # Scheduler
-        # TODO: Add diffusers LMSDiscreteScheduler
         timesteps = tf.range(1, 1000, 1000 // num_steps)
 
         # Get Initial parameters
@@ -271,9 +270,11 @@ class StableDiffusionBase:
         method : str
             Prompt-to-Prompt method to chose. Can be ['refine', 'replace', 'reweigh'].
         self_attn_steps : Union[float, Tuple[float, float]]
-
+            Specifies at which step of the start of the diffusion process it replaces
+            the self attention maps with the ones produced by the edited prompt.
         cross_attn_steps : Union[float, Tuple[float, float]]
-
+            Specifies at which step of the start of the diffusion process it replaces
+            the cross attention maps with the ones produced by the edited prompt.
         attn_edit_weights: np.array([]), optional
             Set of weights for each edit prompt token.
             This is used for manipulating the importance of the edit prompt tokens,
@@ -324,6 +325,12 @@ class StableDiffusionBase:
         >>> Image.fromarray(img[0]).save("edited_prompt.png")
         """
 
+        # Prompt-to-Prompt: check inputs
+        if isinstance(self_attn_steps, float):
+            self_attn_steps = (0.0, self_attn_steps)
+        if isinstance(cross_attn_steps, float):
+            cross_attn_steps = (0.0, cross_attn_steps)
+
         # Tokenize and encode prompt
         encoded_text = self.encode_text(prompt)
         conditional_context = self._expand_tensor(encoded_text, batch_size)
@@ -341,12 +348,6 @@ class StableDiffusionBase:
             unconditional_context = self._expand_tensor(
                 unconditional_context, batch_size
             )
-
-        ## PTP stuff
-        if isinstance(self_attn_steps, float):
-            self_attn_steps = (0.0, self_attn_steps)
-        if isinstance(cross_attn_steps, float):
-            cross_attn_steps = (0.0, cross_attn_steps)
 
         if method == "refine":
             # Get the mask and indices of the difference between the original prompt token's and the edited one
@@ -366,7 +367,6 @@ class StableDiffusionBase:
         latent = self._get_initial_diffusion_noise(batch_size, seed)
 
         # Scheduler
-        # TODO: Add diffusers LMSDiscreteScheduler
         timesteps = tf.range(1, 1000, 1000 // num_steps)
 
         # Get Initial parameters
@@ -411,6 +411,7 @@ class StableDiffusionBase:
                         attn_suffix="attn2",
                     )
                 elif method == "refine":
+                    # Use cross attention with function A(J)
                     ptp_utils.update_cross_attn_mode(
                         diff_model=self.diffusion_model_ptp,
                         mode="edit",
@@ -588,7 +589,6 @@ class StableDiffusionBase:
         decoded = ((decoded + 1) / 2) * 255
         return np.clip(decoded, 0, 255).astype("uint8")
 
-    # e_t -> latent | x -> latent -> latent_prev
     def _get_x_prev(self, x, e_t, a_t, a_prev):
         sqrt_one_minus_at = math.sqrt(1 - a_t)
         pred_x0 = (x - sqrt_one_minus_at * e_t) / math.sqrt(a_t)
@@ -736,20 +736,14 @@ class StableDiffusion(StableDiffusionBase):
             if self._diffusion_model is None:
                 self._diffusion_model_ptp = self.diffusion_model
             else:
-                # Reset the graph - this is to save up memory
+                # Reset the graph and add/overwrite variables and forward calls
                 self._diffusion_model.compile(jit_compile=self.jit_compile)
                 self._diffusion_model_ptp = self._diffusion_model
 
             # Add extra variables and callbacks
-            self._diffusion_model_ptp = ptp_utils.rename_cross_attention_layers(
-                self._diffusion_model_ptp
-            )
-            self._diffusion_model_ptp = ptp_utils.overwrite_forward_call(
-                self._diffusion_model_ptp
-            )
-            self._diffusion_model_ptp = ptp_utils.set_initial_tf_variables(
-                self._diffusion_model_ptp
-            )
+            ptp_utils.rename_cross_attention_layers(self._diffusion_model_ptp)
+            ptp_utils.overwrite_forward_call(self._diffusion_model_ptp)
+            ptp_utils.set_initial_tf_variables(self._diffusion_model_ptp)
 
         return self._diffusion_model_ptp
 
@@ -848,14 +842,8 @@ class StableDiffusionV2(StableDiffusionBase):
                 self._diffusion_model_ptp = self._diffusion_model
 
             # Add extra variables and callbacks
-            self._diffusion_model_ptp = ptp_utils.rename_cross_attention_layers(
-                self._diffusion_model_ptp
-            )
-            self._diffusion_model_ptp = ptp_utils.overwrite_forward_call(
-                self._diffusion_model_ptp
-            )
-            self._diffusion_model_ptp = ptp_utils.set_initial_tf_variables(
-                self._diffusion_model_ptp
-            )
+            ptp_utils.rename_cross_attention_layers(self._diffusion_model_ptp)
+            ptp_utils.overwrite_forward_call(self._diffusion_model_ptp)
+            ptp_utils.set_initial_tf_variables(self._diffusion_model_ptp)
 
         return self._diffusion_model_ptp
